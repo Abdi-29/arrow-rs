@@ -2109,8 +2109,11 @@ fn cast_string_to_timestamp_impl<O: OffsetSizeTrait, T: ArrowTimestampType, Tz: 
             .map(|v| {
                 v.map(|v| {
                     let naive = string_to_datetime(tz, v)?.naive_utc();
-                    T::make_value(naive).ok_or_else(|| {
-                        ArrowError::CastError(format!(
+                    T::make_value(naive).ok_or_else(|| match T::UNIT {
+                        TimeUnit::Nanosecond => ArrowError::CastError(format!(
+                            "Overflow converting {naive} to Nanosecond. The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804"
+                        )),
+                        _ => ArrowError::CastError(format!(
                             "Overflow converting {naive} to {:?}",
                             T::UNIT
                         ))
@@ -4123,6 +4126,29 @@ mod tests {
             }
         }
     }
+
+
+    #[test]
+    fn test_cast_outside_supported_range_for_nanoseconds() {
+        const EXPECTED_ERROR_MESSAGE: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
+
+        let array = StringArray::from(vec![
+            Some("1650-01-01 01:01:01.000001"),
+        ]);
+    
+        let tz = Utc;
+        let cast_options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+    
+        let result = cast_string_to_timestamp_impl::<i32, TimestampNanosecondType, _>(&array, &tz, &cast_options);
+    
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.to_string(), format!("Cast error: Overflow converting {} to Nanosecond. {}", array.value(0), EXPECTED_ERROR_MESSAGE));
+    }
+
 
     #[test]
     fn test_cast_string_to_timestamp_overflow() {
